@@ -1,4 +1,4 @@
-name: KernelSU Next + SuSFS - Mi 11 Ultra (star) - LineageOS base
+name: SukiSU Ultra + SuSFS + KPM - Mi 11 Ultra (star)
 
 on:
   workflow_dispatch:
@@ -8,11 +8,9 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout kernel source (AOSP-for-vili lineage-23.2-ksu)
+      - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
-          repository: AOSP-for-vili/android_kernel_xiaomi_sm8350
-          ref: lineage-23.2-ksu
           fetch-depth: 1
 
       - name: Install dependencies
@@ -22,11 +20,9 @@ jobs:
             git bc bison flex libssl-dev \
             make libelf-dev python3 \
             zip curl wget cpio \
-            clang-12 lld-12 llvm-12 \
-            ccache cmake python-is-python3 \
-            libncurses5-dev patch rsync
+            clang-12 lld-12 llvm-12
 
-      - name: Setup Clang 12 toolchain (igual que Xinran)
+      - name: Setup Clang 12 toolchain
         run: |
           mkdir -p clang/bin
           for tool in clang clang++ ld.lld llvm-ar llvm-nm \
@@ -44,50 +40,57 @@ jobs:
             https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 \
             gcc32
 
-      - name: Add KernelSU Next
+      - name: Add KernelSU (estándar)
         run: |
           curl -LSs \
-            "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
-            | bash -s next
-          echo "KernelSU Next añadido"
+            "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" \
+            | bash -s main
+          echo "KernelSU añadido"
 
-      - name: Add SuSFS (rama kernel-5.4)
+      - name: Add SuSFS completo (kernel-5.4)
         run: |
           git clone --depth=1 \
             https://gitlab.com/simonpunk/susfs4ksu.git \
             -b kernel-5.4 \
             ../susfs4ksu
 
-          SUSFS_DIR="../susfs4ksu"
-          echo "Patches disponibles:"
-          ls "$SUSFS_DIR/kernel_patches/"
+          SUSFS_DIR="../susfs4ksu/kernel_patches"
 
-          cp "$SUSFS_DIR/kernel_patches/fs/susfs.c" fs/
-          cp "$SUSFS_DIR/kernel_patches/include/linux/susfs.h" include/linux/
-          cp "$SUSFS_DIR/kernel_patches/include/linux/susfs_def.h" include/linux/
+          # Copiar archivos base de SuSFS
+          cp "$SUSFS_DIR/fs/susfs.c" fs/susfs.c
+          cp "$SUSFS_DIR/include/linux/susfs.h" include/linux/susfs.h
+          cp "$SUSFS_DIR/include/linux/susfs_def.h" include/linux/susfs_def.h
 
-          grep -q "linux/cred.h" include/linux/susfs_def.h || \
+          # Añadir header faltante en susfs_def.h
+          if ! grep -q "linux/cred.h" include/linux/susfs_def.h; then
             sed -i '1i#include <linux/cred.h>' include/linux/susfs_def.h
+          fi
 
-          grep -q "susfs.o" fs/Makefile || \
-            echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
+          # Registrar susfs.o en fs/Makefile
+          if ! grep -q "susfs.o" fs/Makefile; then
+            sed -i '/obj-y.*+=/a obj-\$(CONFIG_KSU_SUSFS) += susfs.o' fs/Makefile
+          fi
 
-          for p in \
-            "$SUSFS_DIR/kernel_patches/50_add_susfs_in_kernel-5.4.patch" \
-            "$SUSFS_DIR/kernel_patches/50_add_susfs_in_fs-5.4.patch"; do
-            if [ -f "$p" ]; then
-              patch -p1 --forward --batch < "$p" || true
-              echo "✅ Patch aplicado: $p"
-              break
+          # Aplicar parches esenciales (los que existan)
+          for patch in \
+            "$SUSFS_DIR/50_add_susfs_in_kernel-5.4.patch" \
+            "$SUSFS_DIR/50_add_susfs_in_fs-5.4.patch" \
+            "$SUSFS_DIR/51_add_susfs_in_devpts-5.4.patch" \
+            "$SUSFS_DIR/52_add_susfs_in_kallsyms-5.4.patch" \
+            "$SUSFS_DIR/53_add_susfs_in_security-5.4.patch" \
+            "$SUSFS_DIR/54_add_susfs_in_sucompat-5.4.patch"; do
+            if [ -f "$patch" ]; then
+              patch -p1 --forward --batch < "$patch" || true
+              echo "✅ Patch aplicado: $(basename $patch)"
+            else
+              echo "⚠️ Patch no encontrado: $(basename $patch)"
             fi
           done
 
-          # Fix fsnotify — QGKI tiene fsnotify backporteado de 5.10+
+          # Fix fsnotify para QGKI (misma firma que kernel 5.10+)
           if [ -f "fs/susfs.c" ]; then
-            perl -i -0pe \
-              's/static int susfs_handle_sdcard_inode_event\s*\(\s*struct fsnotify_mark\s*\*mark,\s*u32\s*mask,\s*struct inode\s*\*inode,\s*struct inode\s*\*dir,\s*const struct qstr\s*\*file_name,\s*u32\s*cookie\s*\)/static int susfs_handle_sdcard_inode_event(struct fsnotify_group *group, struct inode *inode, u32 mask, const void *data, int data_type, const struct qstr *file_name, u32 cookie, struct fsnotify_iter_info *iter_info)/s' \
-              fs/susfs.c
-            sed -i 's/\.handle_inode_event = /.handle_event = /' fs/susfs.c
+            sed -i 's/\.handle_inode_event =/\.handle_event =/g' fs/susfs.c
+            sed -i 's/susfs_handle_sdcard_inode_event(struct fsnotify_mark \*mark, u32 mask, struct inode \*inode, struct inode \*dir, const struct qstr \*file_name, u32 cookie)/susfs_handle_sdcard_inode_event(struct fsnotify_group *group, struct inode *inode, u32 mask, const void *data, int data_type, const struct qstr *file_name, u32 cookie, struct fsnotify_iter_info *iter_info)/g' fs/susfs.c
           fi
 
           echo "✅ SuSFS añadido"
@@ -129,21 +132,7 @@ jobs:
             echo "  FIXED $f"
           done
 
-          echo "=== FIX 6: seccomp_cache.c stub ==="
-          python3 - << 'PYEOF'
-          import os
-          sc = "drivers/kernelsu/infra/seccomp_cache.c"
-          if os.path.exists(sc):
-              with open(sc, "w") as f:
-                  f.write(
-                      "#include \"seccomp_cache.h\"\n"
-                      "void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr) {}\n"
-                      "void ksu_seccomp_cache_init(void) {}\n"
-                  )
-              print("  FIXED seccomp_cache.c")
-          PYEOF
-
-          echo "=== FIX 7: pkg_observer.c fsnotify ==="
+          echo "=== FIX 6: pkg_observer.c fsnotify ==="
           python3 - << 'PYEOF'
           import re, os
           pkg = "drivers/kernelsu/manager/pkg_observer.c"
@@ -182,24 +171,7 @@ jobs:
           print("  FIXED pkg_observer.c")
           PYEOF
 
-          echo "=== FIX 8: TP hooks Kbuild ==="
-          python3 - << 'PYEOF'
-          import re, os
-          kb = "drivers/kernelsu/Kbuild"
-          if os.path.exists(kb):
-              with open(kb, "r") as f:
-                  content = f.read()
-              content = re.sub(
-                  r'(ifeq.*TRACEPOINT.*\n(?:.*\n)*?endif)',
-                  lambda m: '\n'.join('# ' + l for l in m.group(0).split('\n')),
-                  content
-              )
-              with open(kb, "w") as f:
-                  f.write(content)
-              print("  FIXED Kbuild TP hooks")
-          PYEOF
-
-          echo "=== FIX 9: linux/minmax.h ==="
+          echo "=== FIX 7: linux/minmax.h ==="
           python3 - << 'PYEOF'
           import os
           minmax_h = "include/linux/minmax.h"
@@ -216,11 +188,9 @@ jobs:
 
           echo "=== ALL FIXES DONE ==="
 
-      - name: Configure kernel — exactamente como Xinran 5.4.289
+      - name: Configure kernel
         run: |
-          # Buscar el defconfig correcto para star
-          DEFCONFIG=$(find arch/arm64/configs -name "*star*defconfig" \
-                      -o -name "lahaina-qgki_defconfig" | head -1)
+          DEFCONFIG=$(find arch/arm64/configs -name "*lahaina*defconfig" -o -name "*star*defconfig" | head -1)
 
           if [ -z "$DEFCONFIG" ]; then
             echo "Configs disponibles:"
@@ -231,14 +201,18 @@ jobs:
           echo "Usando: $DEFCONFIG"
           cp "$DEFCONFIG" arch/arm64/configs/star_ksu_defconfig
 
-          # Configuración exacta basada en config del kernel Xinran 5.4.289
           cat >> arch/arm64/configs/star_ksu_defconfig << 'EOF'
+
+          # Seguridad
+          CONFIG_STACKPROTECTOR=y
+          CONFIG_STACKPROTECTOR_STRONG=y
+          CONFIG_CFI_CLANG_SHADOW=y
 
           # KernelSU
           CONFIG_KSU=y
           CONFIG_KPM=y
 
-          # SuSFS (igual que Xinran)
+          # SuSFS
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
@@ -249,23 +223,15 @@ jobs:
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
           CONFIG_KSU_SUSFS_SUS_MAP=y
 
-          # Hook — KPROBES (confirmado en ambos kernels funcionales)
-          CONFIG_KSU_KPROBES_HOOK=y
-          CONFIG_KPROBES=y
-          CONFIG_HAVE_KPROBES=y
-
-          # Necesarios
-          CONFIG_TMPFS_XATTR=y
-          CONFIG_TMPFS_POSIX_ACL=y
-          CONFIG_KALLSYMS=y
-          CONFIG_KALLSYMS_ALL=y
-
-          # LTO thin (como Xinran)
-          CONFIG_LTO_CLANG=y
-          CONFIG_THINLTO=y
+          # Imagen sin comprimir (como Xinran)
+          CONFIG_BUILD_ARM64_UNCOMPRESSED_KERNEL=y
+          # CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE is not set
           EOF
 
-          echo "Defconfig configurado"
+          # Aplicar fragmento star si existe
+          if [ -f "arch/arm64/configs/vendor/star_QGKI.config" ]; then
+            cat arch/arm64/configs/vendor/star_QGKI.config >> arch/arm64/configs/star_ksu_defconfig
+          fi
 
       - name: Build kernel
         run: |
@@ -301,14 +267,10 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
 
-          if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
-            cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
-          elif [ -f out/arch/arm64/boot/Image.gz ]; then
-            cp out/arch/arm64/boot/Image.gz AnyKernel3/
-          elif [ -f out/arch/arm64/boot/Image ]; then
+          if [ -f out/arch/arm64/boot/Image ]; then
             cp out/arch/arm64/boot/Image AnyKernel3/
           else
-            echo "❌ No imagen"
+            echo "❌ No Image found"
             ls out/arch/arm64/boot/ || true
             exit 1
           fi
@@ -324,14 +286,14 @@ jobs:
             sed -i 's|device.name1=.*|device.name1=star|g' AnyKernel3/anykernel.sh
 
           cd AnyKernel3
-          zip -r9 ../KSUNext-star-LineageOS-$(date +%Y%m%d-%H%M).zip . \
+          zip -r9 ../SukiSU-star-$(date +%Y%m%d-%H%M).zip . \
             -x ".git*" -x "*.md"
 
       - name: Upload kernel zip
         uses: actions/upload-artifact@v4
         with:
-          name: KSUNext-star-LineageOS
-          path: KSUNext-star-LineageOS-*.zip
+          name: SukiSU-star
+          path: SukiSU-star-*.zip
           retention-days: 7
 
       - name: Upload build log on failure
