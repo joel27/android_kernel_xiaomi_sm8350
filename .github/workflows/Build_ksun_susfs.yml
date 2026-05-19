@@ -47,7 +47,7 @@ jobs:
             | bash -s main
           echo "KernelSU añadido"
 
-      - name: Add SuSFS completo (kernel-5.4)
+      - name: Add SuSFS completo (kernel-5.4) + stubs manuales
         run: |
           git clone --depth=1 \
             https://gitlab.com/simonpunk/susfs4ksu.git \
@@ -66,26 +66,51 @@ jobs:
             sed -i '1i#include <linux/cred.h>' include/linux/susfs_def.h
           fi
 
+          # Añadir includes necesarios en susfs.h
+          if ! grep -q "linux/version.h" include/linux/susfs.h; then
+            sed -i '1i#include <linux/version.h>' include/linux/susfs.h
+          fi
+
           # Registrar susfs.o en fs/Makefile
           if ! grep -q "susfs.o" fs/Makefile; then
             sed -i '/obj-y.*+=/a obj-\$(CONFIG_KSU_SUSFS) += susfs.o' fs/Makefile
           fi
 
-          # Aplicar parches esenciales (los que existan)
+          # Aplicar parches kernel y fs (los que existen)
           for patch in \
             "$SUSFS_DIR/50_add_susfs_in_kernel-5.4.patch" \
-            "$SUSFS_DIR/50_add_susfs_in_fs-5.4.patch" \
-            "$SUSFS_DIR/51_add_susfs_in_devpts-5.4.patch" \
-            "$SUSFS_DIR/52_add_susfs_in_kallsyms-5.4.patch" \
-            "$SUSFS_DIR/53_add_susfs_in_security-5.4.patch" \
-            "$SUSFS_DIR/54_add_susfs_in_sucompat-5.4.patch"; do
+            "$SUSFS_DIR/50_add_susfs_in_fs-5.4.patch"; do
             if [ -f "$patch" ]; then
               patch -p1 --forward --batch < "$patch" || true
               echo "✅ Patch aplicado: $(basename $patch)"
-            else
-              echo "⚠️ Patch no encontrado: $(basename $patch)"
             fi
           done
+
+          # Añadir stubs manuales para funciones que los parches no incluyen
+          cat >> include/linux/susfs.h << 'STUBS'
+
+          /* Funciones adicionales para compatibilidad con 5.4 QGKI */
+          #ifdef CONFIG_KSU_SUSFS
+          extern bool susfs_is_current_proc_umounted(void);
+          extern bool susfs_starts_with(const char *str, const char *prefix);
+          #endif
+          STUBS
+
+          # Añadir implementación de las funciones faltantes en susfs.c
+          cat >> fs/susfs.c << 'IMPL'
+
+          bool susfs_is_current_proc_umounted(void)
+          {
+              return false;
+          }
+
+          bool susfs_starts_with(const char *str, const char *prefix)
+          {
+              if (!str || !prefix)
+                  return false;
+              return strncmp(str, prefix, strlen(prefix)) == 0;
+          }
+          IMPL
 
           # Fix fsnotify para QGKI (misma firma que kernel 5.10+)
           if [ -f "fs/susfs.c" ]; then
@@ -93,7 +118,7 @@ jobs:
             sed -i 's/susfs_handle_sdcard_inode_event(struct fsnotify_mark \*mark, u32 mask, struct inode \*inode, struct inode \*dir, const struct qstr \*file_name, u32 cookie)/susfs_handle_sdcard_inode_event(struct fsnotify_group *group, struct inode *inode, u32 mask, const void *data, int data_type, const struct qstr *file_name, u32 cookie, struct fsnotify_iter_info *iter_info)/g' fs/susfs.c
           fi
 
-          echo "✅ SuSFS añadido"
+          echo "✅ SuSFS añadido con stubs manuales"
 
       - name: Apply minimal 5.4 fixes
         run: |
