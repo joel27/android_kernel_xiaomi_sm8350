@@ -40,6 +40,33 @@ jobs:
             https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 \
             gcc32
 
+      - name: Add Xiaomi missing symbols stubs
+        run: |
+          cat > drivers/soc/qcom/xiaomi_stubs.c << 'STUBS'
+          #include <linux/kernel.h>
+          #include <linux/errno.h>
+
+          // Wi-Fi hardware version stubs
+          int get_hw_version_platform(void) { return 0; }
+          int get_hw_country_version(void) { return 0; }
+          int get_hw_version_build(void) { return 0; }
+          int get_hw_version_major(void) { return 0; }
+          int get_hw_version_minor(void) { return 0; }
+
+          // Mi display stubs
+          int mi_disp_register_client(void *data) { return 0; }
+          int mi_disp_unregister_client(void *data) { return 0; }
+
+          // Generic HW ID stub
+          int get_hw_id_value(void) { return 0; }
+          STUBS
+
+          mkdir -p drivers/soc/qcom
+          if ! grep -q "xiaomi_stubs.o" drivers/soc/qcom/Makefile; then
+            echo 'obj-y += xiaomi_stubs.o' >> drivers/soc/qcom/Makefile
+          fi
+          echo "✅ Stubs añadidos"
+
       - name: Configure kernel
         run: |
           DEFCONFIG=$(find arch/arm64/configs -name "*lahaina*defconfig" -o -name "*star*defconfig" | head -1)
@@ -53,11 +80,11 @@ jobs:
           CONFIG_STACKPROTECTOR_STRONG=y
           CONFIG_CFI_CLANG_SHADOW=y
 
-          # KernelSU (ya incluido en el código, solo activamos)
+          # KernelSU
           CONFIG_KSU=y
           CONFIG_KPM=y
 
-          # SuSFS (ya incluido en el código, solo activamos)
+          # SuSFS
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
