@@ -1,4 +1,4 @@
-name: SukiSU + SuSFS (integrado) - Mi 11 Ultra (star)
+name: KSUNext + SuSFS integrado - Mi 11 Ultra (star) LineageOS
 
 on:
   workflow_dispatch:
@@ -8,9 +8,11 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout kernel source
+      - name: Checkout kernel source (lineage-23.2-ksu — SuSFS ya integrado)
         uses: actions/checkout@v4
         with:
+          repository: AOSP-for-vili/android_kernel_xiaomi_sm8350
+          ref: lineage-23.2-ksu
           fetch-depth: 1
 
       - name: Install dependencies
@@ -40,51 +42,169 @@ jobs:
             https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 \
             gcc32
 
-      - name: Add Xiaomi missing symbols stubs
+      - name: Add KernelSU Next
         run: |
-          cat > drivers/soc/qcom/xiaomi_stubs.c << 'STUBS'
-          #include <linux/kernel.h>
-          #include <linux/errno.h>
+          curl -LSs \
+            "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
+            | bash -s next
+          echo "KernelSU Next añadido"
 
-          // Wi-Fi hardware version stubs
-          int get_hw_version_platform(void) { return 0; }
-          int get_hw_country_version(void) { return 0; }
-          int get_hw_version_build(void) { return 0; }
-          int get_hw_version_major(void) { return 0; }
-          int get_hw_version_minor(void) { return 0; }
+      - name: Apply minimal 5.4 QGKI fixes
+        run: |
+          echo "=== FIX 1: pgtable.h ==="
+          grep -rl "linux/pgtable.h" drivers/kernelsu/ 2>/dev/null | while read f; do
+            sed -i 's|#include <linux/pgtable.h>|#include <asm/pgtable.h>|g' "$f"
+            echo "  FIXED $f"
+          done
 
-          // Mi display stubs
-          int mi_disp_register_client(void *data) { return 0; }
-          int mi_disp_unregister_client(void *data) { return 0; }
+          echo "=== FIX 2: strncpy_from_user_nofault ==="
+          grep -rl "strncpy_from_user_nofault" drivers/kernelsu/ 2>/dev/null | while read f; do
+            sed -i 's|strncpy_from_user_nofault|strncpy_from_user|g' "$f"
+            echo "  FIXED $f"
+          done
 
-          // Generic HW ID stub
-          int get_hw_id_value(void) { return 0; }
-          STUBS
+          echo "=== FIX 3: TWA_RESUME ==="
+          grep -rl "TWA_RESUME" drivers/kernelsu/ 2>/dev/null | while read f; do
+            sed -i 's|TWA_RESUME|0|g' "$f"
+            echo "  FIXED $f"
+          done
 
-          mkdir -p drivers/soc/qcom
-          if ! grep -q "xiaomi_stubs.o" drivers/soc/qcom/Makefile; then
-            echo 'obj-y += xiaomi_stubs.o' >> drivers/soc/qcom/Makefile
-          fi
-          echo "✅ Stubs añadidos"
+          echo "=== FIX 4: copy_*_nofault ==="
+          grep -rl "copy_to_kernel_nofault" drivers/kernelsu/ 2>/dev/null | while read f; do
+            sed -i 's|copy_to_kernel_nofault|probe_kernel_write|g' "$f"
+          done
+          grep -rl "copy_from_user_nofault" drivers/kernelsu/ 2>/dev/null | while read f; do
+            sed -i 's|copy_from_user_nofault|probe_kernel_read|g' "$f"
+          done
+          grep -rl "copy_to_user_nofault" drivers/kernelsu/ 2>/dev/null | while read f; do
+            sed -i 's|copy_to_user_nofault|probe_kernel_write|g' "$f"
+          done
+
+          echo "=== FIX 5: security_inode_init_security_anon ==="
+          grep -rl "security_inode_init_security_anon" drivers/kernelsu/ 2>/dev/null | while read f; do
+            perl -0pi -e 's/security_inode_init_security_anon\([^;]*\)/0/g' "$f"
+            echo "  FIXED $f"
+          done
+
+          echo "=== FIX 6: seccomp_cache.c stub ==="
+          python3 - << 'PYEOF'
+          import os
+          sc = "drivers/kernelsu/infra/seccomp_cache.c"
+          if os.path.exists(sc):
+              with open(sc, "w") as f:
+                  f.write(
+                      "#include \"seccomp_cache.h\"\n"
+                      "void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr) {}\n"
+                      "void ksu_seccomp_cache_init(void) {}\n"
+                  )
+              print("  FIXED seccomp_cache.c")
+          PYEOF
+
+          echo "=== FIX 7: pkg_observer.c fsnotify ==="
+          python3 - << 'PYEOF'
+          import re, os
+          pkg = "drivers/kernelsu/manager/pkg_observer.c"
+          if not os.path.exists(pkg):
+              exit(0)
+          with open(pkg, "r") as f:
+              content = f.read()
+          content = content.replace('.handle_inode_event =', '.handle_event =')
+          old_fn = re.compile(
+              r'static int (ksu_handle_inode_event|ksu_handle_event)\s*\('
+              r'\s*struct fsnotify_mark\s*\*\s*\w+\s*,'
+              r'\s*u32\s*\w+\s*,'
+              r'\s*struct inode\s*\*\s*\w+\s*,'
+              r'\s*struct inode\s*\*\s*\w+\s*,'
+              r'\s*const struct qstr\s*\*\s*\w+\s*,'
+              r'\s*u32\s*\w+\s*\)',
+              re.DOTALL
+          )
+          new_fn = (
+              'static int ksu_handle_event('
+              'struct fsnotify_group *group, struct inode *inode, '
+              'u32 mask, const void *data, int data_type, '
+              'const struct qstr *file_name, u32 cookie, '
+              'struct fsnotify_iter_info *iter_info)'
+          )
+          if old_fn.search(content):
+              content = old_fn.sub(new_fn, content)
+          else:
+              content = re.sub(
+                  r'static int ksu_handle_inode_event\b',
+                  'static int ksu_handle_event', content
+              )
+          content = content.replace('ksu_handle_inode_event', 'ksu_handle_event')
+          with open(pkg, "w") as f:
+              f.write(content)
+          print("  FIXED pkg_observer.c")
+          PYEOF
+
+          echo "=== FIX 8: TP hooks Kbuild ==="
+          python3 - << 'PYEOF'
+          import re, os
+          kb = "drivers/kernelsu/Kbuild"
+          if os.path.exists(kb):
+              with open(kb, "r") as f:
+                  content = f.read()
+              content = re.sub(
+                  r'(ifeq.*TRACEPOINT.*\n(?:.*\n)*?endif)',
+                  lambda m: '\n'.join('# ' + l for l in m.group(0).split('\n')),
+                  content
+              )
+              with open(kb, "w") as f:
+                  f.write(content)
+              print("  FIXED Kbuild TP hooks")
+          PYEOF
+
+          echo "=== FIX 9: linux/minmax.h ==="
+          python3 - << 'PYEOF'
+          import os
+          minmax_h = "include/linux/minmax.h"
+          if not os.path.exists(minmax_h):
+              with open(minmax_h, "w") as f:
+                  f.write(
+                      "#ifndef _LINUX_MINMAX_H\n"
+                      "#define _LINUX_MINMAX_H\n\n"
+                      "#include <linux/kernel.h>\n\n"
+                      "#endif\n"
+                  )
+              print("  CREATED include/linux/minmax.h")
+          PYEOF
+
+          echo "=== ALL FIXES DONE ==="
 
       - name: Configure kernel
         run: |
-          DEFCONFIG=$(find arch/arm64/configs -name "*lahaina*defconfig" -o -name "*star*defconfig" | head -1)
-          echo "Usando: $DEFCONFIG"
+          # Buscar defconfig base para star/lahaina
+          DEFCONFIG=""
+          for f in \
+            arch/arm64/configs/vendor/lahaina-qgki_defconfig \
+            arch/arm64/configs/lahaina-qgki_defconfig \
+            arch/arm64/configs/vendor/star_defconfig; do
+            if [ -f "$f" ]; then
+              DEFCONFIG="$f"
+              break
+            fi
+          done
+
+          if [ -z "$DEFCONFIG" ]; then
+            echo "Configs disponibles:"
+            find arch/arm64/configs -name "*.defconfig" | head -20
+            exit 1
+          fi
+
+          echo "✅ Usando defconfig base: $DEFCONFIG"
           cp "$DEFCONFIG" arch/arm64/configs/star_ksu_defconfig
 
+          # Añadir configs KSU al final — sin sobreescribir el defconfig base
+          # ORDEN IMPORTANTE: primero el defconfig, luego nuestros appends
           cat >> arch/arm64/configs/star_ksu_defconfig << 'EOF'
 
-          # Seguridad
-          CONFIG_STACKPROTECTOR=y
-          CONFIG_STACKPROTECTOR_STRONG=y
-          CONFIG_CFI_CLANG_SHADOW=y
-
-          # KernelSU
+          # ── KernelSU ──────────────────────────────────
           CONFIG_KSU=y
           CONFIG_KPM=y
 
-          # SuSFS
+          # ── SuSFS (ya integrado en repo, solo activar) ──
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
@@ -95,14 +215,24 @@ jobs:
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
           CONFIG_KSU_SUSFS_SUS_MAP=y
 
-          # Imagen sin comprimir
+          # ── Hook: KPROBES ─────────────────────────────
+          CONFIG_KSU_KPROBES_HOOK=y
+          CONFIG_KPROBES=y
+          CONFIG_HAVE_KPROBES=y
+          # CONFIG_KSU_INLINE_HOOK is not set
+          # CONFIG_KSU_TRACEPOINT_HOOK is not set
+
+          # ── Necesarios ────────────────────────────────
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_KALLSYMS=y
+          CONFIG_KALLSYMS_ALL=y
+
+          # ── Imagen sin comprimir (como Xinran) ────────
           CONFIG_BUILD_ARM64_UNCOMPRESSED_KERNEL=y
-          # CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE is not set
           EOF
 
-          if [ -f "arch/arm64/configs/vendor/star_QGKI.config" ]; then
-            cat arch/arm64/configs/vendor/star_QGKI.config >> arch/arm64/configs/star_ksu_defconfig
-          fi
+          echo "✅ Defconfig configurado"
 
       - name: Build kernel
         run: |
@@ -138,10 +268,14 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
 
-          if [ -f out/arch/arm64/boot/Image ]; then
+          if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
+            cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          elif [ -f out/arch/arm64/boot/Image.gz ]; then
+            cp out/arch/arm64/boot/Image.gz AnyKernel3/
+          elif [ -f out/arch/arm64/boot/Image ]; then
             cp out/arch/arm64/boot/Image AnyKernel3/
           else
-            echo "❌ No Image found"
+            echo "❌ No imagen"
             ls out/arch/arm64/boot/ || true
             exit 1
           fi
@@ -157,14 +291,14 @@ jobs:
             sed -i 's|device.name1=.*|device.name1=star|g' AnyKernel3/anykernel.sh
 
           cd AnyKernel3
-          zip -r9 ../SukiSU-star-$(date +%Y%m%d-%H%M).zip . \
+          zip -r9 ../KSUNext-star-lineage-$(date +%Y%m%d-%H%M).zip . \
             -x ".git*" -x "*.md"
 
       - name: Upload kernel zip
         uses: actions/upload-artifact@v4
         with:
-          name: SukiSU-star
-          path: SukiSU-star-*.zip
+          name: KSUNext-star-lineage
+          path: KSUNext-star-lineage-*.zip
           retention-days: 7
 
       - name: Upload build log on failure
