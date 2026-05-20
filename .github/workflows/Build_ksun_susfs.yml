@@ -49,6 +49,54 @@ jobs:
             | bash -s next
           echo "KernelSU Next añadido"
 
+      - name: Add Xiaomi missing symbols stubs
+        run: |
+          # Estos símbolos son funciones Xiaomi-específicas que el repo
+          # de LineageOS referencia pero no implementa en esta config.
+          # Se usan en drivers de Wi-Fi (cnss2/icnss2) y batería.
+          # Escribimos con python3 para evitar problemas YAML con heredoc.
+          python3 - << 'PYEOF'
+          import os
+
+          stub_file = "drivers/soc/qcom/xiaomi_hw_stubs.c"
+          stub_content = (
+              "// Xiaomi hardware stubs for LineageOS kernel build\n"
+              "// get_hw_version_* used by cnss2/icnss2 Wi-Fi firmware download\n"
+              "// mi_disp_* used by qti_battery_charger display notifications\n"
+              "#include <linux/kernel.h>\n"
+              "#include <linux/export.h>\n\n"
+              "int get_hw_version_platform(void) { return 0; }\n"
+              "EXPORT_SYMBOL(get_hw_version_platform);\n\n"
+              "int get_hw_country_version(void) { return 0; }\n"
+              "EXPORT_SYMBOL(get_hw_country_version);\n\n"
+              "int get_hw_version_build(void) { return 0; }\n"
+              "EXPORT_SYMBOL(get_hw_version_build);\n\n"
+              "int get_hw_version_major(void) { return 0; }\n"
+              "EXPORT_SYMBOL(get_hw_version_major);\n\n"
+              "int get_hw_version_minor(void) { return 0; }\n"
+              "EXPORT_SYMBOL(get_hw_version_minor);\n\n"
+              "int mi_disp_register_client(void *data) { return 0; }\n"
+              "EXPORT_SYMBOL(mi_disp_register_client);\n\n"
+              "int mi_disp_unregister_client(void *data) { return 0; }\n"
+              "EXPORT_SYMBOL(mi_disp_unregister_client);\n"
+          )
+
+          os.makedirs("drivers/soc/qcom", exist_ok=True)
+          with open(stub_file, "w") as f:
+              f.write(stub_content)
+          print(f"  CREATED {stub_file}")
+
+          # Añadir al Makefile de drivers/soc/qcom/
+          makefile = "drivers/soc/qcom/Makefile"
+          if os.path.exists(makefile):
+              with open(makefile, "r") as f:
+                  content = f.read()
+              if "xiaomi_hw_stubs" not in content:
+                  with open(makefile, "a") as f:
+                      f.write("\nobj-y += xiaomi_hw_stubs.o\n")
+                  print(f"  ADDED xiaomi_hw_stubs.o to {makefile}")
+          PYEOF
+
       - name: Apply minimal 5.4 QGKI fixes
         run: |
           echo "=== FIX 1: pgtable.h ==="
@@ -63,12 +111,9 @@ jobs:
             echo "  FIXED $f"
           done
 
-          echo "=== FIX 3: TWA_RESUME — solo en código C, NO en directivas del preprocesador ==="
-          # El problema: sed reemplazaba TWA_RESUME en #ifndef/#define también
-          # Solución: usar python para reemplazar solo en líneas que NO empiezan con #
+          echo "=== FIX 3: TWA_RESUME — solo en código C, NO en directivas ==="
           python3 - << 'PYEOF'
           import os, glob
-
           for pattern in ["drivers/kernelsu/**/*.c", "drivers/kernelsu/**/*.h"]:
               for f in glob.glob(pattern, recursive=True):
                   with open(f, "r") as fh:
@@ -80,7 +125,6 @@ jobs:
                   changed = False
                   for line in lines:
                       stripped = line.lstrip()
-                      # NO tocar líneas de preprocesador (#ifndef, #ifdef, #define, #if)
                       if stripped.startswith("#"):
                           new_lines.append(line)
                       elif "TWA_RESUME" in line:
