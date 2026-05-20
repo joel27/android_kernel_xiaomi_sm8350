@@ -1,4 +1,4 @@
-name: Mi 11 Ultra Kernel Hybrid - KSU/SuSFS/KPM
+name: Mi 11 Ultra Hybrid Kernel - KSU + SuSFS + KPM
 
 on:
   workflow_dispatch:
@@ -42,10 +42,10 @@ jobs:
             https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 \
             gcc32
 
-      - name: Add KernelSU / SukiSU base
+      - name: Add SukiSU / KernelSU base
         run: |
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
-          echo "Root framework añadido"
+          echo "Root framework added"
 
       - name: Add Xiaomi missing symbols stubs
         run: |
@@ -68,6 +68,9 @@ jobs:
 
           int get_hw_version_minor(void) { return 0; }
           EXPORT_SYMBOL(get_hw_version_minor);
+
+          int get_hw_id_value(void) { return 0; }
+          EXPORT_SYMBOL(get_hw_id_value);
 
           int mi_disp_register_client(void *data) { return 0; }
           EXPORT_SYMBOL(mi_disp_register_client);
@@ -159,7 +162,7 @@ jobs:
           elif [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
             cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
           else
-            echo "❌ No image found"
+            echo "No image found"
             ls out/arch/arm64/boot/ || true
             exit 1
           fi
