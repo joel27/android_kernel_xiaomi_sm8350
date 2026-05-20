@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout kernel source (lineage-23.2-ksu — SuSFS ya integrado)
+      - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
           repository: AOSP-for-vili/android_kernel_xiaomi_sm8350
@@ -63,11 +63,36 @@ jobs:
             echo "  FIXED $f"
           done
 
-          echo "=== FIX 3: TWA_RESUME ==="
-          grep -rl "TWA_RESUME" drivers/kernelsu/ 2>/dev/null | while read f; do
-            sed -i 's|TWA_RESUME|0|g' "$f"
-            echo "  FIXED $f"
-          done
+          echo "=== FIX 3: TWA_RESUME — solo en código C, NO en directivas del preprocesador ==="
+          # El problema: sed reemplazaba TWA_RESUME en #ifndef/#define también
+          # Solución: usar python para reemplazar solo en líneas que NO empiezan con #
+          python3 - << 'PYEOF'
+          import os, glob
+
+          for pattern in ["drivers/kernelsu/**/*.c", "drivers/kernelsu/**/*.h"]:
+              for f in glob.glob(pattern, recursive=True):
+                  with open(f, "r") as fh:
+                      content = fh.read()
+                  if "TWA_RESUME" not in content:
+                      continue
+                  lines = content.split("\n")
+                  new_lines = []
+                  changed = False
+                  for line in lines:
+                      stripped = line.lstrip()
+                      # NO tocar líneas de preprocesador (#ifndef, #ifdef, #define, #if)
+                      if stripped.startswith("#"):
+                          new_lines.append(line)
+                      elif "TWA_RESUME" in line:
+                          new_lines.append(line.replace("TWA_RESUME", "0"))
+                          changed = True
+                      else:
+                          new_lines.append(line)
+                  if changed:
+                      with open(f, "w") as fh:
+                          fh.write("\n".join(new_lines))
+                      print(f"  FIXED {f}")
+          PYEOF
 
           echo "=== FIX 4: copy_*_nofault ==="
           grep -rl "copy_to_kernel_nofault" drivers/kernelsu/ 2>/dev/null | while read f; do
@@ -175,7 +200,6 @@ jobs:
 
       - name: Configure kernel
         run: |
-          # Buscar defconfig base para star/lahaina
           DEFCONFIG=""
           for f in \
             arch/arm64/configs/vendor/lahaina-qgki_defconfig \
@@ -193,18 +217,14 @@ jobs:
             exit 1
           fi
 
-          echo "✅ Usando defconfig base: $DEFCONFIG"
+          echo "✅ Usando: $DEFCONFIG"
           cp "$DEFCONFIG" arch/arm64/configs/star_ksu_defconfig
 
-          # Añadir configs KSU al final — sin sobreescribir el defconfig base
-          # ORDEN IMPORTANTE: primero el defconfig, luego nuestros appends
           cat >> arch/arm64/configs/star_ksu_defconfig << 'EOF'
 
-          # ── KernelSU ──────────────────────────────────
           CONFIG_KSU=y
           CONFIG_KPM=y
 
-          # ── SuSFS (ya integrado en repo, solo activar) ──
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
@@ -215,20 +235,16 @@ jobs:
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
           CONFIG_KSU_SUSFS_SUS_MAP=y
 
-          # ── Hook: KPROBES ─────────────────────────────
           CONFIG_KSU_KPROBES_HOOK=y
           CONFIG_KPROBES=y
           CONFIG_HAVE_KPROBES=y
           # CONFIG_KSU_INLINE_HOOK is not set
           # CONFIG_KSU_TRACEPOINT_HOOK is not set
 
-          # ── Necesarios ────────────────────────────────
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
           CONFIG_KALLSYMS=y
           CONFIG_KALLSYMS_ALL=y
-
-          # ── Imagen sin comprimir (como Xinran) ────────
           CONFIG_BUILD_ARM64_UNCOMPRESSED_KERNEL=y
           EOF
 
