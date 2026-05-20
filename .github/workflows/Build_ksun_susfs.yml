@@ -47,7 +47,7 @@ jobs:
             | bash -s main
           echo "KernelSU añadido"
 
-      - name: Add SuSFS completo (kernel-5.4) + stubs manuales + includes forzados
+      - name: Add SuSFS completo (kernel-5.4) + stubs + includes + macro
         run: |
           git clone --depth=1 \
             https://gitlab.com/simonpunk/susfs4ksu.git \
@@ -96,6 +96,16 @@ jobs:
           #endif
           STUBS
 
+          # Definir DEFAULT_KSU_MNT_ID si no existe
+          if ! grep -q "DEFAULT_KSU_MNT_ID" include/linux/susfs.h; then
+            cat >> include/linux/susfs.h << 'MACRO'
+
+          #ifndef DEFAULT_KSU_MNT_ID
+          #define DEFAULT_KSU_MNT_ID 1000
+          #endif
+          MACRO
+          fi
+
           # Añadir implementación de las funciones faltantes en susfs.c
           cat >> fs/susfs.c << 'IMPL'
 
@@ -113,8 +123,7 @@ jobs:
           IMPL
 
           # ⚠️ FORZAR INCLUSIÓN DEL HEADER EN LOS ARCHIVOS MODIFICADOS
-          # Sin esto, las funciones declaradas en susfs.h no son visibles
-          for file in fs/devpts/inode.c kernel/kallsyms.c; do
+          for file in fs/devpts/inode.c kernel/kallsyms.c fs/notify/fdinfo.c; do
             if [ -f "$file" ] && ! grep -q '<linux/susfs.h>' "$file"; then
               sed -i '1i#include <linux/susfs.h>' "$file"
               echo "  ✅ Añadido #include <linux/susfs.h> en $file"
@@ -127,7 +136,7 @@ jobs:
             sed -i 's/susfs_handle_sdcard_inode_event(struct fsnotify_mark \*mark, u32 mask, struct inode \*inode, struct inode \*dir, const struct qstr \*file_name, u32 cookie)/susfs_handle_sdcard_inode_event(struct fsnotify_group *group, struct inode *inode, u32 mask, const void *data, int data_type, const struct qstr *file_name, u32 cookie, struct fsnotify_iter_info *iter_info)/g' fs/susfs.c
           fi
 
-          echo "✅ SuSFS añadido con includes forzados"
+          echo "✅ SuSFS añadido con todas las correcciones"
 
       - name: Apply minimal 5.4 fixes
         run: |
