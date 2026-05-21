@@ -1,4 +1,4 @@
-name: SukiSU-SUSFS-5.4.302-Clang12
+name: SukiSU-SUSFS-5.4.302-Clang19
 
 on:
   workflow_dispatch:
@@ -21,15 +21,16 @@ jobs:
           sudo apt-get install -y \
             git bc bison flex libssl-dev \
             make libelf-dev python3 \
-            zip curl wget cpio \
-            clang-12 lld-12 llvm-12
+            zip curl wget cpio
 
-      - name: Setup Clang 12 toolchain
+      - name: Setup Clang 19 toolchain
         run: |
+          wget https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.0/clang+llvm-19.1.0-x86_64-linux-gnu-ubuntu-22.04.tar.xz
+          tar -xf clang+llvm-19.1.0-x86_64-linux-gnu-ubuntu-22.04.tar.xz
+          export CLANG_DIR="$PWD/clang+llvm-19.1.0-x86_64-linux-gnu-ubuntu-22.04"
           mkdir -p clang/bin
-          for tool in clang clang++ ld.lld llvm-ar llvm-nm \
-                      llvm-objcopy llvm-objdump llvm-strip; do
-            ln -sf /usr/bin/${tool}-12 clang/bin/${tool}
+          for tool in clang clang++ ld.lld llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-strip; do
+            ln -sf "$CLANG_DIR/bin/$tool" clang/bin/$tool
           done
           clang/bin/clang --version
 
@@ -127,7 +128,6 @@ jobs:
           # CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE is not set
           EOF
 
-          # Añadir fragmento star si existe
           if [ -f "arch/arm64/configs/vendor/star_QGKI.config" ]; then
             cat arch/arm64/configs/vendor/star_QGKI.config >> arch/arm64/configs/star_ksu_defconfig
           fi
@@ -191,19 +191,19 @@ jobs:
             sed -i 's|device.name1=.*|device.name1=star|g' AnyKernel3/anykernel.sh
 
           cd AnyKernel3
-          zip -r9 ../SukiSU-5.4.302-Clang12-$(date +%Y%m%d-%H%M).zip . \
+          zip -r9 ../SukiSU-5.4.302-Clang19-$(date +%Y%m%d-%H%M).zip . \
             -x ".git*" -x "*.md"
 
       - name: Upload kernel zip
         uses: actions/upload-artifact@v4
         with:
-          name: SukiSU-Clang12
-          path: SukiSU-5.4.302-Clang12-*.zip
+          name: SukiSU-Clang19
+          path: SukiSU-5.4.302-Clang19-*.zip
           retention-days: 7
 
       - name: Upload build log on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log-clang12
+          name: build-log-clang19
           path: build.log
