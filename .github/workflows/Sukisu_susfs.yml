@@ -1,4 +1,4 @@
-name: SukiSU Ultra + SuSFS + KPM - Mi 11 Ultra (star) - Stable
+name: SukiSU-SUSFS-5.4.302-Clang12
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ jobs:
       - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
-          repository: joel27/android_kernel_xiaomi_sm8350
+          repository: AOSP-for-vili/android_kernel_xiaomi_sm8350
           ref: lineage-23.2-ksu
           fetch-depth: 1
 
@@ -73,23 +73,28 @@ jobs:
           fi
           echo "✅ Stubs añadidos"
 
-      - name: Configure kernel
+      - name: Configure kernel — réplica del 5.4.268 funcional
         run: |
-          # Usar lahaina-qgki_defconfig como base y añadir fragmento star
           cp arch/arm64/configs/vendor/lahaina-qgki_defconfig arch/arm64/configs/star_ksu_defconfig
 
           cat >> arch/arm64/configs/star_ksu_defconfig << 'EOF'
 
-          # Línea de comandos (compatible con HyperOS y con soporte para logs)
-          CONFIG_CMDLINE="cgroup_disable=pressure ramoops.mem_address=0xA0000000 ramoops.mem_size=0x100000 ramoops.console_size=0x40000 ramoops.record_size=0x40000"
+          # Línea de comandos (igual que kernel funcional)
+          CONFIG_CMDLINE="cgroup_disable=pressure"
           CONFIG_CMDLINE_EXTEND=y
 
-          # Seguridad (esencial para HyperOS)
+          # Seguridad — mismas opciones que el 5.4.268
           CONFIG_STACKPROTECTOR=y
+          CONFIG_STACKPROTECTOR_PER_TASK=y
           CONFIG_STACKPROTECTOR_STRONG=y
-          CONFIG_CFI_CLANG_SHADOW=y
+          CONFIG_SHADOW_CALL_STACK=y
 
-          # Soporte para logs de kernel panic (pstore)
+          # LTO y CFI DESACTIVADOS (como en el kernel que arranca)
+          # CONFIG_LTO_CLANG is not set
+          CONFIG_LTO_NONE=y
+          # CONFIG_CFI_CLANG is not set
+
+          # PSTORE para depuración
           CONFIG_PSTORE=y
           CONFIG_PSTORE_RAM=y
           CONFIG_PSTORE_CONSOLE=y
@@ -97,29 +102,36 @@ jobs:
 
           # KernelSU
           CONFIG_KSU=y
+          CONFIG_KSU_MANUAL_SU=y
           CONFIG_KPM=y
 
-          # SuSFS (activar las funcionalidades compatibles)
+          # SuSFS (con opciones AUTO_ADD_* que usa tu kernel)
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
           CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
           CONFIG_KSU_SUSFS_SPOOF_UNAME=y
           CONFIG_KSU_SUSFS_ENABLE_LOG=y
           CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
           CONFIG_KSU_SUSFS_SUS_MAP=y
 
-          # Formato de la imagen del kernel
+          # Formato de imagen
           CONFIG_BUILD_ARM64_UNCOMPRESSED_KERNEL=y
           CONFIG_BUILD_ARM64_DT_OVERLAY=y
           # CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE is not set
           EOF
 
-          # Añadir fragmento de configuración específico de star
+          # Añadir fragmento star si existe
           if [ -f "arch/arm64/configs/vendor/star_QGKI.config" ]; then
             cat arch/arm64/configs/vendor/star_QGKI.config >> arch/arm64/configs/star_ksu_defconfig
           fi
+
           echo "✅ Defconfig configurado"
 
       - name: Build kernel
@@ -164,12 +176,10 @@ jobs:
             exit 1
           fi
 
-          # Incluir dtbo en el zip (se gestiona solo)
           if [ -f out/arch/arm64/boot/dtbo.img ]; then
             cp out/arch/arm64/boot/dtbo.img AnyKernel3/
           fi
 
-          # Configurar AnyKernel3 para star
           sed -i 's|do.devicecheck=1|do.devicecheck=0|g' AnyKernel3/anykernel.sh
           grep -q "^BLOCK=" AnyKernel3/anykernel.sh && \
             sed -i 's|^BLOCK=.*|BLOCK=boot;|g' AnyKernel3/anykernel.sh || \
@@ -181,19 +191,19 @@ jobs:
             sed -i 's|device.name1=.*|device.name1=star|g' AnyKernel3/anykernel.sh
 
           cd AnyKernel3
-          zip -r9 ../SukiSU-star-HyperOS-$(date +%Y%m%d-%H%M).zip . \
+          zip -r9 ../SukiSU-5.4.302-Clang12-$(date +%Y%m%d-%H%M).zip . \
             -x ".git*" -x "*.md"
 
       - name: Upload kernel zip
         uses: actions/upload-artifact@v4
         with:
-          name: SukiSU-star-HyperOS
-          path: SukiSU-star-HyperOS-*.zip
+          name: SukiSU-Clang12
+          path: SukiSU-5.4.302-Clang12-*.zip
           retention-days: 7
 
       - name: Upload build log on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log
+          name: build-log-clang12
           path: build.log
