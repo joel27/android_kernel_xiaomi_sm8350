@@ -25,12 +25,15 @@ jobs:
 
       - name: Setup Clang 19 toolchain
         run: |
-          wget https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.0/clang+llvm-19.1.0-x86_64-linux-gnu-ubuntu-22.04.tar.xz
-          tar -xf clang+llvm-19.1.0-x86_64-linux-gnu-ubuntu-22.04.tar.xz
-          export CLANG_DIR="$PWD/clang+llvm-19.1.0-x86_64-linux-gnu-ubuntu-22.04"
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 19
+          LLVM_BIN=/usr/lib/llvm-19/bin
           mkdir -p clang/bin
           for tool in clang clang++ ld.lld llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-strip; do
-            ln -sf "$CLANG_DIR/bin/$tool" clang/bin/$tool
+            if [ -x "$LLVM_BIN/$tool" ]; then
+              ln -sf "$LLVM_BIN/$tool" clang/bin/$tool
+            fi
           done
           clang/bin/clang --version
 
